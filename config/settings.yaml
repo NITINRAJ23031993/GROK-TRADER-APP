@@ -1,0 +1,9 @@
+symbol: XAUUSD
+mt5:
+  path: /path/to/mt5/terminal.exe  # Optional
+telegram:
+  bot_token: your_bot_token
+  chat_id: your_chat_id
+risk:
+  pct: 1.0
+  max_dd: 5.0
