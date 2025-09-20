@@ -1,39 +1,62 @@
 import argparse
-from src.ingest.data_fetcher import fetch_historical_data  # Assuming you implement this
+import threading
+import time
+from datetime import datetime, timedelta
+from src.ingest.data_fetcher import fetch_data
 from src.features.build_features import build_features
-from src.models.train_ensemble import train_ensemble_model
-from src.models.daily_retrain import retrain_model
-from src.backtest.backtester import run_backtest
-from src.execution.live_loop import start_live_trading
-from src.execution.mt5_connector import initialize_mt5
-import config.settings as settings  # If settings.yaml is populated
+from src.models.train_ensemble import train_model
+from src.models.daily_retrain import daily_retrain  # For scheduling
+from src.backtest.backtester import backtest_strategy
+from src.backtest.reporter import write_summary
+from src.execution.paper_loop import paper_loop  # We'll create this as a function
+from src.execution.live_loop import live_loop  # We'll create this as a function
+import yaml
 
-def main(mode='paper', symbol='EURUSD', timeframe='1h', train=True):
-    # Step 1: Ingest historical data
-    data = fetch_historical_data(symbol, timeframe)  # Implement in data_fetcher.py
+def main(mode='paper', duration=None):
+    with open('config/settings.yaml', 'r') as f:
+        config = yaml.safe_load(f)
 
-    # Step 2: Build features
-    featured_data = build_features(data)
+    start_time = datetime.now()
+    end_time = start_time + timedelta(hours=duration) if duration else None
 
-    # Step 3: Train or retrain model
-    if train:
-        model = train_ensemble_model(featured_data)
+    # Step 1-4: Setup (fetch, features, train, backtest)
+    fetch_data()
+    build_features()
+    train_model()
+    df = pd.read_parquet('data/features.parquet')
+    from src.strategies.ensemble import Ensemble
+    ens = Ensemble()
+    signals = ens.generate_signals(df)
+    returns = backtest_strategy(df, signals)
+    stats = compute_metrics(returns)  # From metrics.py
+    write_summary(stats, returns)
+
+    # Step 5: Start daily retrain in thread
+    retrain_thread = threading.Thread(target=daily_retrain_loop)
+    retrain_thread.daemon = True
+    retrain_thread.start()
+
+    # Step 6: Start trading loop
+    if mode == 'paper':
+        paper_loop()
     else:
-        model = retrain_model(featured_data)  # Daily retrain
+        live_loop()
 
-    # Step 4: Backtest
-    backtest_results = run_backtest(model, featured_data)
-    print("Backtest results:", backtest_results)
+    # Keep running until duration or interrupt
+    while True:
+        if end_time and datetime.now() > end_time:
+            print("Duration reached, stopping.")
+            break
+        time.sleep(60)
 
-    # Step 5: Execution
-    initialize_mt5(mode)  # Connect to MT5 in paper or live
-    start_live_trading(model, symbol, timeframe)  # Runs the loop
+def daily_retrain_loop():
+    while True:
+        daily_retrain()
+        time.sleep(3600)  # Check hourly for schedule
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--mode', default='paper', choices=['paper', 'live'], help='Trading mode')
-    parser.add_argument('--symbol', default='EURUSD', help='Trading symbol')
-    parser.add_argument('--timeframe', default='1h', help='Timeframe for data')
-    parser.add_argument('--no-train', action='store_false', dest='train', help='Skip initial training')
+    parser.add_argument('--mode', default='paper', choices=['paper', 'live'])
+    parser.add_argument('--duration', type=int, help='Hours to run (optional)')
     args = parser.parse_args()
-    main(mode=args.mode, symbol=args.symbol, timeframe=args.timeframe, train=args.train)
+    main(mode=args.mode, duration=args.duration)

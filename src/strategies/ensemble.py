@@ -1,67 +1,61 @@
-from src.strategies.base_strategy import StrategyBase
-from src.strategies.trend_following import TrendFollowing
-from src.strategies.mean_reversion import MeanReversion
 import pandas as pd
 import numpy as np
-from src.models.predict import load_model, MODEL_PATH
+from src.models.predict import load_model, predict_proba
+from src.strategies.base_strategy import StrategyBase
 import torch
-from torch import nn, optim
-import os
+from collections import deque
+import random
 
-class RLAgent(nn.Module):
-    def __init__(self, input_dim):
+class DQN(torch.nn.Module):
+    def __init__(self, state_size, action_size):
         super().__init__()
-        self.fc1 = nn.Linear(input_dim, 64)
-        self.fc2 = nn.Linear(64, 3)  # buy, hold, sell
+        self.fc1 = torch.nn.Linear(state_size, 64)
+        self.fc2 = torch.nn.Linear(64, 32)
+        self.out = torch.nn.Linear(32, action_size)
 
-    def forward(self, state):
-        x = torch.relu(self.fc1(state))
-        return torch.softmax(self.fc2(x), dim=-1)
+    def forward(self, x):
+        x = torch.relu(self.fc1(x))
+        x = torch.relu(self.fc2(x))
+        return self.out(x)
 
 class Ensemble(StrategyBase):
-    def __init__(self, weights={'ml': 0.5, 'trend': 0.3, 'reversion': 0.2}):
+    def __init__(self):
         super().__init__('ensemble')
-        self.trend = TrendFollowing()
-        self.reversion = MeanReversion()
-        self.weights = weights
         self.model = load_model()
-        self.features = ['ret_1','ret_5','atr_14','rsi_14','ema_8','ema_21','ema_55','boll_w','vol_z','macd','stoch_k','session_asia','session_london','session_ny']
-        self.rl_agent = RLAgent(len(self.features))
-        self.optimizer = optim.Adam(self.rl_agent.parameters(), lr=0.001)
-        self.gamma = 0.99
-        self.load_rl_state()
+        self.features = ['ret_1','ret_5','atr_14','rsi_14','ema_8','ema_21','ema_55','boll_w','vol_z','macd','stoch_k','session_asia','session_london','session_ny', 'vwap', 'sentiment']
+        # RL setup
+        self.action_size = 3  # buy, hold, sell
+        self.memory = deque(maxlen=2000)
+        self.gamma = 0.95
+        self.epsilon = 1.0
+        self.epsilon_min = 0.01
+        self.epsilon_decay = 0.995
+        self.dqn = DQN(len(self.features), self.action_size)
+        self.optimizer = torch.optim.Adam(self.dqn.parameters(), lr=0.001)
+        self.loss_fn = torch.nn.MSELoss()
 
-    def generate_signals(self, df):
-        trend_sig = self.trend.generate_signals(df)
-        rev_sig = self.reversion.generate_signals(df)
-        X = df[self.features].fillna(0)
-        ml_proba = self.model.predict_proba(X.values)[:, 1] if hasattr(self.model, 'predict_proba') else self.model.predict(X.values)
-        ml_sig = pd.Series(np.where(ml_proba > 0.7, 1, np.where(ml_proba < 0.3, -1, 0)), index=df.index)
-        
-        state = torch.tensor(X.iloc[-1].values, dtype=torch.float32).unsqueeze(0)
-        action_probs = self.rl_agent(state)[0]
-        rl_adjust = (torch.argmax(action_probs).item() - 1) * 0.2  # -0.2 to 0.2 adjust
-        
-        ensemble_sig = (self.weights['ml'] * ml_sig + self.weights['trend'] * trend_sig + self.weights['reversion'] * rev_sig) + rl_adjust
-        sig = np.where(ensemble_sig > 0.3, 1, np.where(ensemble_sig < -0.3, -1, 0))
-        return pd.Series(sig, index=df.index).fillna(0)
+    def generate_signals(self, df: pd.DataFrame) -> pd.Series:
+        X = df[self.features]
+        proba_lgb = predict_proba(self.model['lgb'], X)
+        proba_lstm = self.model['lstm'](torch.tensor(X.values).float().unsqueeze(1)).detach().numpy().squeeze()
+        proba = (proba_lgb + proba_lstm) / 2
+        signals = np.where(proba > 0.6, 1, np.where(proba < 0.4, -1, 0))
+        return pd.Series(signals, index=df.index)
 
     def update_rl(self, state, action, reward, next_state):
-        state = torch.tensor(state, dtype=torch.float32).unsqueeze(0)
-        next_state = torch.tensor(next_state, dtype=torch.float32).unsqueeze(0)
-        q_values = self.rl_agent(state)
-        next_q = self.rl_agent(next_state).max(1)[0].item()
-        target = reward + self.gamma * next_q
-        action_idx = action + 1  # shift to 0-2
-        loss = nn.MSELoss()(q_values[0, action_idx], torch.tensor(target, dtype=torch.float32))
-        self.optimizer.zero_grad()
-        loss.backward()
-        self.optimizer.step()
-        self.save_rl_state()
-
-    def save_rl_state(self):
-        torch.save(self.rl_agent.state_dict(), 'models/rl_agent.pth')
-
-    def load_rl_state(self):
-        if os.path.exists('models/rl_agent.pth'):
-            self.rl_agent.load_state_dict(torch.load('models/rl_agent.pth'))
+        self.memory.append((state, action, reward, next_state))
+        if len(self.memory) > 32:
+            batch = random.sample(self.memory, 32)
+            states, actions, rewards, next_states = zip(*batch)
+            states = torch.tensor(np.array(states)).float()
+            next_states = torch.tensor(np.array(next_states)).float()
+            actions = torch.tensor(actions).long()
+            rewards = torch.tensor(rewards).float()
+            q_values = self.dqn(states).gather(1, actions.unsqueeze(1)).squeeze()
+            next_q = self.dqn(next_states).max(1)[0]
+            target = rewards + self.gamma * next_q
+            loss = self.loss_fn(q_values, target)
+            self.optimizer.zero_grad()
+            loss.backward()
+            self.optimizer.step()
+            self.epsilon = max(self.epsilon_min, self.epsilon * self.epsilon_decay)

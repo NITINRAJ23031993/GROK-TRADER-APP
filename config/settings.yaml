@@ -1,9 +1,13 @@
-symbol: XAUUSD
 mt5:
-  path: /path/to/mt5/terminal.exe  # Optional
-telegram:
-  bot_token: your_bot_token
-  chat_id: your_chat_id
+  path: /path/to/mt5/terminal64.exe  # Optional
+  account: your_account
+  password: your_password
+  server: YourBroker-Live  # e.g., ICMarkets-Live
+symbol: XAUUSD
 risk:
   pct: 1.0
   max_dd: 5.0
+telegram:
+  token: your_token
+  chat_id: your_chat_id
+mode: paper  # Default; change to live

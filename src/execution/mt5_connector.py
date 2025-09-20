@@ -1,27 +1,35 @@
-import json
+import yaml
 from src.utils.logger import info, error
-cfg = json.load(open('config/settings.yaml'))
 try:
     import MetaTrader5 as mt5
 except Exception as e:
     mt5 = None
     error('MT5 import failed: '+str(e))
 
-def init_mt5():
+def init_mt5(mode='paper'):
     if mt5 is None:
         return False
-    path = cfg.get('mt5',{}).get('path')
-    ok = mt5.initialize(path) if path else mt5.initialize()
+    with open('config/settings.yaml', 'r') as f:
+        cfg = yaml.safe_load(f)['mt5']
+    server = cfg.get('server')
+    if mode == 'paper':
+        server = server.replace('Live', 'Demo')
+    path = cfg.get('path')
+    login = cfg.get('account')
+    password = cfg.get('password')
+    ok = mt5.initialize(path=path, login=login, password=password, server=server)
     if not ok:
         error('MT5 initialize failed')
         return False
-    info('MT5 initialized')
+    info('MT5 initialized in ' + mode)
     return True
 
 def mt5_place_order(side, volume, sl=None, tp=None):
     if mt5 is None:
         raise RuntimeError('MT5 not available')
-    symbol = cfg.get('symbol','XAUUSD')
+    with open('config/settings.yaml', 'r') as f:
+        cfg = yaml.safe_load(f)
+    symbol = cfg.get('symbol', 'XAUUSD')
     tick = mt5.symbol_info_tick(symbol)
     price = tick.ask if side=='buy' else tick.bid
     order_type = mt5.ORDER_TYPE_BUY if side=='buy' else mt5.ORDER_TYPE_SELL

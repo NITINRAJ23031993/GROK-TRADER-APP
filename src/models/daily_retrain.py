@@ -8,6 +8,7 @@ from src.backtest.metrics import compute_metrics
 from src.strategies.ensemble import Ensemble
 from src.notifier import send_telegram
 import pandas as pd
+import joblib
 
 def daily_retrain():
     info('Daily retrain...')
@@ -23,10 +24,10 @@ def daily_retrain():
         # RL update from backtest
         for i in range(1, len(returns)):
             state = df[ens.features].iloc[i-1].values
-            action = signals.iloc[i]
+            action = signals.iloc[i] + 1  # 0 hold, 1 buy, 2 sell
             reward = returns.iloc[i]
             next_state = df[ens.features].iloc[i].values
-            if action != 0:
+            if action != 1:
                 ens.update_rl(state, action, reward, next_state)
         info(f'Updated: Win {stats["win_rate"]:.2%}')
         send_telegram(f'Updated: Win {stats["win_rate"]:.2%}')
