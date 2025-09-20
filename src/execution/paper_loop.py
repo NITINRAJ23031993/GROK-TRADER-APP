@@ -6,11 +6,15 @@ from src.execution.order_executor import execute_order
 from src.risk.risk_manager import calc_lot, check_drawdown, calc_sl_tp
 from src.utils.logger import info
 from src.notifier import send_telegram
+from src.utils.trade_logger import TradeLogger  # Added import
 import yaml
+from datetime import datetime
 
 def paper_loop():
     with open('config/settings.yaml', 'r') as f:
         cfg = yaml.safe_load(f)
+    mode = 'paper'  # Fixed for this loop
+    logger = TradeLogger(mode=mode)  # Initialize logger
     print('Starting PAPER loop')
     ens = Ensemble()
     balance = 10000.0
@@ -38,9 +42,12 @@ def paper_loop():
                 stop_loss_pips = atr * 10
                 lot = calc_lot(balance, cfg.get('risk', {}).get('pct', 1.0), stop_loss_pips, use_kelly=True)
                 sl, tp = calc_sl_tp(current_price, side, atr)
-                res = execute_order(side, lot, mode='paper', sl=sl, tp=tp)
+                res = execute_order(side, lot, mode=mode, sl=sl, tp=tp)
+                open_time = str(datetime.now())  # Capture open time
                 info(f'Paper {side} {lot} @ {current_price}, SL:{sl}, TP:{tp} - {res}')
+                logger.log_trade(side, current_price, sl, tp, open_time)  # Log after execute
                 open_trade = res
+                open_trade['time'] = open_time  # Store for close
                 # Sim close
                 if len(df) > 5:
                     pnl = (df['Close'].iloc[-1] - df['Close'].iloc[-6]) * lot * 100 if side == 'buy' else (df['Close'].iloc[-6] - df['Close'].iloc[-1]) * lot * 100
@@ -52,6 +59,8 @@ def paper_loop():
                     reward = pnl / balance
                     next_state = df[ens.features].iloc[-1].values
                     ens.update_rl(state, action, reward, next_state)
+                    logger.log_trade(side, current_price, sl, tp, open_time=open_trade['time'], close_time=str(datetime.now()), pnl=pnl)  # Log on close
+                    logger.display_table()  # Optional console view
                     open_trade = None
                     send_telegram(f'Paper trade closed: PNL {pnl}')
             else:

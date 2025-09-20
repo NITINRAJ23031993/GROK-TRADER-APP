@@ -7,12 +7,17 @@ from src.execution.order_executor import execute_order
 from src.risk.risk_manager import calc_lot, check_drawdown, calc_sl_tp
 from src.utils.logger import info
 from src.notifier import send_telegram
+from src.utils.trade_logger import TradeLogger  # Added import
 import yaml
+from datetime import datetime
+import MetaTrader5 as mt5
 
 def live_loop():
     with open('config/settings.yaml', 'r') as f:
         cfg = yaml.safe_load(f)
-    if not init_mt5(mode='live'):
+    mode = 'live'  # Fixed for this loop
+    logger = TradeLogger(mode=mode)  # Initialize logger
+    if not init_mt5(mode=mode):
         raise RuntimeError('MT5 init failed')
     print('Starting LIVE loop')
     ens = Ensemble()
@@ -42,21 +47,22 @@ def live_loop():
                 stop_loss_pips = atr * 10
                 lot = calc_lot(balance, cfg.get('risk', {}).get('pct', 1.0), stop_loss_pips, use_kelly=True)
                 sl, tp = calc_sl_tp(current_price, side, atr)
-                res = execute_order(side, lot, mode='live', sl=sl, tp=tp)
+                res = execute_order(side, lot, mode=mode, sl=sl, tp=tp)
+                open_time = str(datetime.now())  # Capture open time
                 info(f'Live {side} {lot} @ {current_price}, SL:{sl}, TP:{tp} - {res}')
+                logger.log_trade(side, current_price, sl, tp, open_time)  # Log after execute
                 open_trade = res
+                open_trade['time'] = open_time  # Store for close
                 # In live, MT5 handles close; monitor pnl
                 positions = mt5.positions_get(symbol=cfg['symbol'])
                 if positions:
                     pnl = positions[0].profit
-                    if pnl:  # Close logic if needed
+                    if pnl:  # Close logic if needed (assume closed if PNL non-zero)
                         balance += pnl
                         peak_balance = max(peak_balance, balance)
-                        state = df[ens.features].iloc[-1].values
-                        action = sig + 1
-                        reward = pnl / balance
-                        next_state = state  # Placeholder
-                        ens.update_rl(state, action, reward, next_state)
+                        logger.log_trade(side, current_price, sl, tp, open_time=open_trade['time'], close_time=str(datetime.now()), pnl=pnl)  # Log on close
+                        logger.get_history(from_mt5=True)  # Pull from MT5
+                        logger.display_table()  # Optional console view
                         open_trade = None
                         send_telegram(f'Live trade closed: PNL {pnl}')
             else:
