@@ -1,10 +1,16 @@
-from .base_strategy import BaseStrategy
-from typing import Any, Dict
+from src.strategies.base_strategy import StrategyBase
+import numpy as np
+import pandas as pd
 
+class MeanReversion(StrategyBase):
+    def __init__(self, window=20, threshold=2.0):
+        super().__init__('mean_reversion')
+        self.window = window
+        self.threshold = threshold
 
-class MeanReversionStrategy(BaseStrategy):
-    """Simple mean-reversion strategy stub."""
-
-    def generate_signal(self, market_data: Any) -> Dict[str, Any]:
-        # Placeholder logic: always return hold
-        return {"signal": "hold", "confidence": 0.0}
+    def generate_signals(self, df):
+        mean = df['Close'].rolling(self.window).mean()
+        std = df['Close'].rolling(self.window).std()
+        zscore = (df['Close'] - mean) / std
+        sig = np.where(zscore < -self.threshold, 1, np.where(zscore > self.threshold, -1, 0))
+        return pd.Series(sig, index=df.index).fillna(0)

@@ -1,17 +1,11 @@
 from abc import ABC, abstractmethod
-from typing import Any, Dict
+import pandas as pd
 
-
-class BaseStrategy(ABC):
-    """Base strategy interface.
-
-    Concrete strategies should implement `generate_signal` which returns
-    a dict like `{"signal": "buy"|"sell"|"hold", "confidence": float}`.
-    """
-
-    def __init__(self, config: Dict[str, Any] | None = None):
-        self.config = config or {}
+class StrategyBase(ABC):
+    def __init__(self, name):
+        self.name = name
 
     @abstractmethod
-    def generate_signal(self, market_data: Any) -> Dict[str, Any]:
-        raise NotImplementedError()
+    def generate_signals(self, df: pd.DataFrame) -> pd.Series:
+        """Generate +1 buy, -1 sell, 0 hold signals."""
+        pass

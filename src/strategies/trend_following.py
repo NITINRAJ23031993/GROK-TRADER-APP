@@ -1,13 +1,13 @@
-from .base_strategy import BaseStrategy
-from typing import Any, Dict
+from src.strategies.base_strategy import StrategyBase
 
+class TrendFollowing(StrategyBase):
+    def __init__(self, short=8, long=21):
+        super().__init__('trend_following')
+        self.short = short
+        self.long = long
 
-class TrendFollowingStrategy(BaseStrategy):
-    """Simple trend-following strategy stub.
-
-    Uses moving average crossover (placeholder) to produce signals.
-    """
-
-    def generate_signal(self, market_data: Any) -> Dict[str, Any]:
-        # Placeholder logic: always return hold
-        return {"signal": "hold", "confidence": 0.0}
+    def generate_signals(self, df):
+        s = df['Close'].ewm(span=self.short).mean()
+        l = df['Close'].ewm(span=self.long).mean()
+        sig = (s > l).astype(int) - (s < l).astype(int)
+        return sig.fillna(0)

@@ -8,7 +8,7 @@ def execute_order(side, volume, mode='paper', sl=None, tp=None):
         from datetime import datetime
         return {'status':'filled','side':side,'volume':volume,'price':None,'time':str(datetime.utcnow()), 'pnl':0}  # Added pnl for RL
     elif mode == 'live':
-        try
+        try:
             from src.execution.mt5_connector import mt5_place_order
             return mt5_place_order(side, volume, sl, tp)
         except Exception as e:
